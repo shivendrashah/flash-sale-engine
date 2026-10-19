@@ -1,0 +1,19 @@
+# =====================================================================================================
+# Prometheus PULLS: every 5 s it sends GET /actuator/prometheus to each target below and stores every number it gets
+# back, with the time. Grafana then asks Prometheus questions in PromQL (monitoring/grafana/dashboards/*.json).
+#
+# Three targets, so the same file works however the app runs:
+#   app1:8080, app2:8080            the two instances of the "cluster" profile (behind nginx)
+#   host.docker.internal:8080       the app running on your Mac (./mvnw spring-boot:run)
+# Whichever isn't running shows as DOWN on http://localhost:9090/targets. That is expected. In cluster mode port 8080
+# is nginx, which refuses /actuator/ (404), so that target is DOWN and the instances are never counted twice.
+# =====================================================================================================
+global:
+  scrape_interval: 5s          # a flash sale changes fast; the default 1 minute would hide a 30-second spike
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: flash-sale-engine
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["app1:8080", "app2:8080", "host.docker.internal:8080"]

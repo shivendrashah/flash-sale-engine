@@ -1,0 +1,9 @@
+# startup. Edits made in the UI are not saved back to the file: change the JSON instead.
+apiVersion: 1
+providers:
+  - name: flash-sale
+    folder: Flash sale
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
