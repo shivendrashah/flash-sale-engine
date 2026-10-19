@@ -1,5 +1,7 @@
 # Flash-Sale Booking Engine
 
+[![CI](https://github.com/shivendrashah/flash-sale-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/shivendrashah/flash-sale-engine/actions/workflows/ci.yml)
+
 A backend for flash sales. A limited stock of items goes on sale at a fixed time, and thousands of people click
 "Buy" in the same second. The system must never sell more units than it has, never charge a card twice, and put
 unpaid stock back on sale. It must keep doing that when Redis, Kafka or one of its own servers fails.
