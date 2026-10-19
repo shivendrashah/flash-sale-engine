@@ -1,0 +1,65 @@
+# =====================================================================================================
+#
+# What it does for every request to /api/ on port 80:
+#   1. per-IP limit: more than 20 requests a second from one IP address (after a burst of 40) -> 429, and the app
+#      never sees the request (this one is in front of the per-buyer limit in the app, RateLimiter)
+#   2. load balancing: send the request to app1 or app2, in turn ("round robin")
+#   3. failover: if an instance can't be reached, try the other one
+# Every other path is the React frontend (frontend/): static files that nginx serves itself, from the
+# image built by frontend/Dockerfile. The apps never see those requests.
+#
+# =====================================================================================================
+
+limit_req_zone $binary_remote_addr zone=per_ip:10m rate=${IP_RATE};
+limit_req_status 429;          # nginx's default is 503, which would tell clients "the server is broken"
+
+upstream flashsale_app {
+    zone flashsale_app 64k;
+    server ${UPSTREAM_1} max_fails=1 fail_timeout=5s;
+    server ${UPSTREAM_2} max_fails=1 fail_timeout=5s;
+    keepalive 32;              # reuse connections to the apps instead of opening one per request
+}
+
+server {
+    listen 80;
+
+    add_header X-Upstream $upstream_addr always;
+
+    location /api/ {
+        limit_req zone=per_ip burst=${IP_BURST} nodelay;
+
+        proxy_pass http://flashsale_app;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";           # needed for keepalive to the apps
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_next_upstream error timeout;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 10s;
+    }
+
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /assets/ {
+        root /usr/share/nginx/html;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    location /actuator/ {
+        return 404;
+    }
+
+    error_page 429 = @ip_rate_limited;
+    location @ip_rate_limited {
+        default_type application/problem+json;
+        add_header Retry-After 1 always;
+        add_header X-Upstream "nginx" always;
+        return 429 '{"type":"about:blank","title":"Too Many Requests","status":429,"detail":"Too many requests from your IP address. Retry after 1 second.","code":"IP_RATE_LIMITED"}';
+    }
+}

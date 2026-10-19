@@ -1,0 +1,7 @@
+# target/ classes sneak into the image.
+target/
+.git/
+.idea/
+*.md
+nginx/
+frontend/
