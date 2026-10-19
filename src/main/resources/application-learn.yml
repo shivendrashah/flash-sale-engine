@@ -1,0 +1,20 @@
+# =====================================================================================================
+# "learn" PROFILE: extra logging so you can WATCH the code run. Nothing else changes.
+#
+# Turn it on:   ./mvnw spring-boot:run -Dspring-boot.run.profiles=learn
+#
+#
+# What you'll see in the console for every request:
+#   - which controller method handled it          (Spring MVC DispatcherServlet)
+#   - when a database transaction starts and ends  (Spring's JpaTransactionManager)
+#   - every SQL statement Hibernate sends           (org.hibernate.SQL)
+#   - the actual values put into each "?"           (org.hibernate.orm.jdbc.bind)
+#   - what the Redis stock gate said to each cart   (StockGate: 1 = taken, 0 = short, - = not taken)
+# =====================================================================================================
+logging:
+  level:
+    org.springframework.web.servlet.DispatcherServlet: debug
+    org.springframework.orm.jpa.JpaTransactionManager: debug
+    org.hibernate.SQL: debug
+    org.hibernate.orm.jdbc.bind: trace
+    com.flashsale.inventory.StockGate: debug

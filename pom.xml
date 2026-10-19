@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ======================================================================================================
+  pom.xml: the Maven build file. It says:
+    1. what this project is (groupId / artifactId / version),
+    2. which libraries it needs (<dependencies>); Maven downloads them into ~/.m2/repository,
+    3. how to build it (<build>).
+
+  You don't need Maven installed: ./mvnw (the "Maven wrapper") downloads the right Maven version by itself.
+    ./mvnw compile    compile src/main/java into target/classes
+    ./mvnw test       compile and run all tests (needs Docker running for Testcontainers)
+    ./mvnw package    build target/flash-sale-engine-0.0.1-SNAPSHOT.jar (a runnable "fat jar")
+  ======================================================================================================
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!--
+	  The PARENT pom from Spring Boot. It brings a tested list of library versions (that's why most
+	  dependencies below have no <version>: Spring Boot 4.1.1 picks versions that work together) and sensible
+	  plugin settings (Java compiler, test runner, ...).
+	-->
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.1</version>
+		<relativePath/> <!-- lookup parent from repository -->
+	</parent>
+
+	<!-- The project's own coordinates. Together they name the jar Maven builds. -->
+	<groupId>com.flashsale</groupId>
+	<artifactId>flash-sale-engine</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>flash-sale-engine</name>
+	<description>Flash-sale booking engine</description>
+	<url/>
+	<licenses>
+		<license/>
+	</licenses>
+	<developers>
+		<developer/>
+	</developers>
+	<scm>
+		<connection/>
+		<developerConnection/>
+		<tag/>
+		<url/>
+	</scm>
+
+	<properties>
+		<java.version>21</java.version> <!-- compile for Java 21 -->
+		<!-- Resilience4j isn't one of the libraries Spring Boot picks versions for, so we pin it here. -->
+		<resilience4j.version>2.4.0</resilience4j.version>
+	</properties>
+
+	<dependencies>
+		<!--
+		  "Starters" are bundles: one starter pulls in everything needed for one job, and Spring Boot
+		  auto-configures it at startup.
+		-->
+
+		<!-- /actuator/health and friends. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<!-- Spring Data JPA + Hibernate + HikariCP connection pool: entities and repositories. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa</artifactId>
+		</dependency>
+		<!-- Spring Data Redis + the Lettuce client: StringRedisTemplate, used by RedisLock. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+		</dependency>
+		<!-- Runs src/main/resources/db/migration/*.sql at startup. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway</artifactId>
+		</dependency>
+		<!-- Bean Validation (@NotBlank, @Valid...) via Hibernate Validator. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+		<!-- Spring MVC + embedded Tomcat web server + Jackson for JSON. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+		<!-- Resilience4j: the circuit breaker around the payment gateways. Just the core library:
+		     PaymentResilienceConfig builds the breakers itself, so there is no auto-configuration to learn first. -->
+		<dependency>
+			<groupId>io.github.resilience4j</groupId>
+			<artifactId>resilience4j-circuitbreaker</artifactId>
+			<version>${resilience4j.version}</version>
+		</dependency>
+		<!-- Publishes each circuit breaker's state and call counts to /actuator/metrics (Micrometer). -->
+		<dependency>
+			<groupId>io.github.resilience4j</groupId>
+			<artifactId>resilience4j-micrometer</artifactId>
+			<version>${resilience4j.version}</version>
+		</dependency>
+		<!-- Spring for Apache Kafka + the Kafka client: KafkaTemplate (OutboxRelay sends with it) and
+		     @KafkaListener (NotificationListener reads with it). Spring Boot builds both from spring.kafka.*. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-kafka</artifactId>
+		</dependency>
+		<!-- Micrometer's Prometheus registry: the same metrics as /actuator/metrics, served in Prometheus's text
+		     format at /actuator/prometheus, where Prometheus collects them every few seconds. -->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<!-- Flyway's PostgreSQL support. -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
+
+		<!-- The PostgreSQL JDBC driver: the low-level library that actually talks to the database.
+		     scope "runtime": our code never imports it directly; it's only needed when the app runs. -->
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!--
+		  TEST dependencies (scope "test"): only on the classpath while tests run, never in the final jar.
+		  Together they bring JUnit, AssertJ, Mockito, MockMvc and Spring's test support.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- Testcontainers: tests start REAL PostgreSQL and Redis in throwaway Docker containers. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- A real Kafka broker for the tests, in a throwaway container. -->
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-kafka</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<!--
+			  Spring Boot's Maven plugin:
+			    ./mvnw spring-boot:run        run the app
+			    ./mvnw spring-boot:test-run   run the app with test containers (TestFlashSaleEngineApplication)
+			    ./mvnw package                also repackages the jar so "java -jar" can start it
+			-->
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

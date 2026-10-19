@@ -1,0 +1,153 @@
+# =====================================================================================================
+# application.yml: the app's settings. Spring Boot reads this file at startup.
+#
+# How to change a setting without editing this file:
+#   - on the command line:   java -jar app.jar --flashsale.holds.ttl=30s
+#   - with Maven:            ./mvnw spring-boot:run -Dspring-boot.run.arguments=--flashsale.holds.ttl=30s
+#   - with a profile:        application-learn.yml is read ON TOP of this file when the "learn" profile is on
+#   - in tests:              @SpringBootTest(properties = "...") in support/IntegrationTest.java
+# =====================================================================================================
+
+spring:
+  application:
+    name: flash-sale-engine            # shows up in every log line
+
+  # container's port 5432 on your machine. (Tests ignore these values: Testcontainers starts its own database
+  # on a random port and Spring Boot points the app at it automatically.)
+  datasource:
+    url: jdbc:postgresql://localhost:5432/flashsale   # JDBC URL = driver : host : port / database name
+    username: flashsale                               # must match POSTGRES_USER in docker-compose.yml
+    password: flashsale                               # must match POSTGRES_PASSWORD (fine locally; use a secret in production)
+    hikari:
+      # threads. This number explains a test result: with NAIVE, exactly 20 buyers got the last unit because 20
+      # connections read "1 left" at the same time.
+      maximum-pool-size: 20
+
+  jpa:
+    # must be loaded inside the service; it can't sneak in hidden queries later.
+    open-in-view: false
+    hibernate:
+      # @Entity matches its table, and refuses to start if not. (Never let Hibernate create tables in production.)
+      ddl-auto: validate
+    properties:
+      hibernate:
+        # one query per hold. This fixes the "N+1 query problem".
+        default_batch_fetch_size: 50
+        # whose stock UPDATEs are flushed at commit (OPTIMISTIC, REDIS_LOCK) locks its rows lowest id first, like
+        # every other code path, and two carts sharing items can't deadlock (LLD.md 9).
+        order_updates: true
+
+  # (Lettuce) and the StringRedisTemplate bean that RedisLock.java, StockGate.java, RateLimiter.java and
+  # SaleCache.java use from these values.
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 1s
+
+  # Spring Boot builds the KafkaTemplate (OutboxRelay sends with it) and the listener containers (NotificationListener)
+  # from these values. Tests ignore bootstrap-servers: Testcontainers points the app at its own broker.
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.block.ms: 2000
+        request.timeout.ms: 2000
+        delivery.timeout.ms: 3000
+    consumer:
+      auto-offset-reset: earliest
+    admin:
+      fail-fast: false
+
+  task:
+    scheduling:
+      pool:
+        size: 5
+
+# database and Redis are all reachable. Load balancers and Kubernetes use endpoints like this.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+
+# =====================================================================================================
+# Our own settings. Each block is bound to a Java record by @ConfigurationProperties:
+#   flashsale.holds.*      -> hold/HoldProperties.java
+#   flashsale.inventory.*  -> inventory/InventoryProperties.java (strategies and the Redis stock gate)
+#   flashsale.payments.*   -> payment/PaymentProperties.java (gateway timeout, circuit breakers, recovery job)
+#   flashsale.rate-limit.* -> ratelimit/RateLimitProperties.java (each buyer's token bucket)
+#   flashsale.sale-cache.* -> catalog/SaleCacheProperties.java (the sale page's copy in Redis)
+#   flashsale.outbox.*     -> outbox/OutboxProperties.java (the relay that sends outbox events to Kafka)
+#   flashsale.notifications.* -> notification/NotificationProperties.java (the worker's retries)
+#   flashsale.reconciliation.* -> inventory/ReconciliationProperties.java (the stock reconciliation job)
+#   flashsale.waiting-room.* -> waitingroom/WaitingRoomProperties.java (the admitter and the pass lifetime)
+#   flashsale.demo.*       -> demo/DemoProperties.java (the demo page's crowd of fake buyers)
+# Durations can be written like 10m, 5s, 100ms (or ISO-8601 like PT5S).
+# =====================================================================================================
+flashsale:
+  holds:
+    ttl: 10m                   # how long a hold keeps the stock while the user pays (Hold.create)
+    expiry-job-enabled: true   # false = HoldExpiryScheduler bean is not created (tests do this)
+    expiry-job-interval: PT5S  # ISO-8601 duration (5 seconds); used by @Scheduled in HoldExpiryScheduler
+    expiry-batch-size: 100     # holds expired per database transaction (HoldExpiryService)
+  inventory:
+    default-strategy: PESSIMISTIC   # used when a request doesn't send the X-Concurrency-Strategy header
+    optimistic-max-attempts: 10     # OptimisticStockReserver gives up (503) after this many clashes
+    redis-lock-ttl: 5s              # RedisLock: the lock auto-expires after this, even if the holder crashed
+    redis-lock-wait: 3s             # RedisLock: how long a buyer waits for the lock before getting 503 "retry"
+    naive-race-window: 0ms          # NaiveStockReserver only: fake "work" between read and write (tests use 50ms)
+    stock-gate-enabled: true        # StockGate on/off. One request can switch it off with the header X-Stock-Gate: off
+    stock-gate-ttl: 60s             # a gate counter lives this long; then the next buyer re-seeds it from PostgreSQL
+  payments:
+    fake-latency: 100ms             # FakePaymentGateway pretends each charge takes this long
+    gateway-timeout: 2s             # how long we wait for a payment provider's answer (like an HTTP read timeout)
+    circuit-breaker:
+      failure-rate-threshold: 50    # % of failed calls (timeouts, 503s) that opens the circuit
+      sliding-window-size: 10       # judge each provider by its last 10 calls...
+      minimum-number-of-calls: 5    # ...once it has made at least 5
+      wait-in-open-state: 10s       # stay open (fail fast, send nothing) this long, then let a few trial calls through
+      permitted-calls-in-half-open-state: 2   # trial calls; if they work, the circuit closes again
+    recovery-job-enabled: true      # false = PaymentRecoveryScheduler bean is not created (tests do this)
+    recovery-job-interval: PT30S    # how often the recovery job looks for stuck payments
+    recover-after: 1m               # a PENDING payment untouched this long is "stuck" (a live request takes ~2 s max)
+    recovery-batch-size: 50         # stuck payments handled per run
+  rate-limit:
+    enabled: true                   # false = nothing is counted (RateLimiter lets every request through)
+    capacity: 10                    # a buyer can send 10 requests at once (a burst)...
+    refill-per-second: 5            # ...and then 5 a second. Past that: 429 RATE_LIMITED + Retry-After
+  sale-cache:
+    enabled: true                   # false = every page view reads PostgreSQL
+    ttl: 1s                         # a cached sale page lives this long (must be more than 0)
+  outbox:
+    relay-enabled: true             # false = no OutboxRelayScheduler bean (tests call OutboxRelay themselves)
+    relay-interval: 500ms           # pause between two relay runs: the most an event waits while Kafka is up
+    batch-size: 100                 # events claimed (FOR UPDATE SKIP LOCKED) per transaction
+    send-timeout: 5s                # the longest the relay waits for Kafka to confirm one batch
+    retry-backoff: 1s               # after a failed send, wait 1 s, then 2 s, 4 s, ... (doubling)...
+    max-retry-backoff: 1m           # ...but never more than a minute between two tries of one event
+  notifications:
+    max-retries: 3                  # tries after the first one, before the dead-letter topic
+    retry-backoff: 1s               # pause before each retry (the partition waits meanwhile, so keep it short)
+  reconciliation:
+    enabled: true                   # false = no StockReconciliationScheduler bean (tests call StockReconciler)
+    interval: 10s                   # a real difference is confirmed and fixed within ~20 s (counters live 60 s)
+  waiting-room:
+    admitter-enabled: true          # false = no WaitingRoomScheduler bean (tests call WaitingRoomAdmitter)
+    admit-interval: 250ms           # the admitter lets buyers in 4 times a second, in small groups
+    pass-ttl: 5m                    # an admitted buyer has this long to create holds; then back to the queue
+  # The demo page's "send a crowd" button (demo/CrowdSimulator). For showing the system to a person,
+  # not for load testing (that is k6, loadtest/).
+  demo:
+    enabled: true                   # false = no crowd and stats endpoints (a real shop would turn this off)
+    think-time: 3s                  # a fake buyer waits 0 to 3 s between the hold and paying, so "held" is visible
+    queue-patience: 2m              # a fake buyer leaves the waiting room after this long without a pass
+    max-lead-time: 10m              # a crowd may be sent at most this long before its sale starts
